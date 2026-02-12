@@ -1,8 +1,10 @@
 {
   "name": "pi-caffeinate",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Pi extension that prevents macOS idle sleep while the agent is working, keeping VPN tunnels alive",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/georgebashi/pi-caffeinate"
@@ -12,6 +14,8 @@
     "@mariozechner/pi-coding-agent": "*"
   },
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   }
 }
