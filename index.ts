@@ -23,7 +23,7 @@ export default function (pi: ExtensionAPI) {
 
 	let proc: ChildProcess | null = null;
 
-	function engage(ctx: { ui: { setStatus: (id: string, text: string | undefined) => void; theme: any } }) {
+	function engage() {
 		if (proc) return; // already running
 		proc = spawn("caffeinate", ["-i"], {
 			stdio: "ignore",
@@ -33,27 +33,24 @@ export default function (pi: ExtensionAPI) {
 		proc.on("exit", () => {
 			proc = null;
 		});
-		const theme = ctx.ui.theme;
-		ctx.ui.setStatus("caffeinate", theme.fg("dim", "☕ awake"));
 	}
 
-	function disengage(ctx: { ui: { setStatus: (id: string, text: string | undefined) => void } }) {
+	function disengage() {
 		if (proc) {
 			proc.kill("SIGTERM");
 			proc = null;
 		}
-		ctx.ui.setStatus("caffeinate", undefined);
 	}
 
-	pi.on("agent_start", async (_event, ctx) => {
-		engage(ctx);
+	pi.on("agent_start", async () => {
+		engage();
 	});
 
-	pi.on("agent_end", async (_event, ctx) => {
-		disengage(ctx);
+	pi.on("agent_end", async () => {
+		disengage();
 	});
 
-	pi.on("session_shutdown", async (_event, ctx) => {
-		disengage(ctx);
+	pi.on("session_shutdown", async () => {
+		disengage();
 	});
 }
