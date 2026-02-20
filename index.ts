@@ -1,8 +1,10 @@
 /**
  * pi-caffeinate — Prevent macOS idle sleep while the agent is working.
  *
- * Spawns `caffeinate -i` on agent_start and kills it on agent_end
- * (and session_shutdown as a safety net). The -i flag creates a
+ * Spawns `caffeinate -i` on agent_start and kills it on agent_end.
+ * A process.on('exit') handler acts as a safety net so that the
+ * child is always cleaned up, even if pi exits without firing
+ * session_shutdown (e.g. uncaught exception). The -i flag creates a
  * "prevent user idle system sleep" assertion, which keeps the CPU
  * and network stack alive. This is the minimum needed to stop
  * WireGuard-based VPNs (e.g. Netbird) from dropping their
@@ -29,7 +31,6 @@ export default function (pi: ExtensionAPI) {
 			stdio: "ignore",
 			detached: false,
 		});
-		proc.unref(); // don't block pi's exit
 		proc.on("exit", () => {
 			proc = null;
 		});
@@ -41,6 +42,13 @@ export default function (pi: ExtensionAPI) {
 			proc = null;
 		}
 	}
+
+	// Safety net: kill caffeinate when our process exits for any reason.
+	// This fires on normal exit, SIGTERM, SIGINT, and even uncaught
+	// exceptions — but NOT SIGKILL (nothing can catch that).
+	process.on("exit", () => {
+		disengage();
+	});
 
 	pi.on("agent_start", async () => {
 		engage();
