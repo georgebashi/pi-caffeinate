@@ -1,7 +1,7 @@
 {
   "name": "pi-caffeinate",
   "version": "1.0.2",
-  "description": "Pi extension that prevents macOS idle sleep while the agent is working, keeping VPN tunnels alive",
+  "description": "Pi extension that keeps the machine awake while the agent is working (macOS, Linux, Windows)",
   "keywords": [
     "pi-package"
   ],
