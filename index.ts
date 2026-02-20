@@ -1,51 +1,121 @@
 /**
- * pi-caffeinate — Prevent macOS idle sleep while the agent is working.
+ * pi-caffeinate — Keep the machine awake while the agent is working.
  *
- * Spawns `caffeinate -i` on agent_start and kills it on agent_end.
+ * Works on macOS, Linux, and Windows:
+ *
+ * macOS:   Spawns `caffeinate -i` which creates a keep-awake
+ *          assertion via IOKit.
+ *
+ * Linux:   Spawns `systemd-inhibit --what=idle ... sleep infinity`
+ *          which takes an idle inhibitor lock via logind.
+ *          Falls back silently if systemd-inhibit is not available
+ *          (e.g. non-systemd distros).
+ *
+ * Windows: Spawns a PowerShell process that calls
+ *          SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+ *          via kernel32.dll P/Invoke, then waits forever. Killing the
+ *          process releases the execution state automatically.
+ *
+ * On all platforms only idle sleep is affected — display sleep,
+ * lid-close sleep, and explicit user-initiated sleep work normally.
+ * The machine is kept awake only while the agent is running (not
+ * while waiting for user input).
+ *
  * A process.on('exit') handler acts as a safety net so that the
  * child is always cleaned up, even if pi exits without firing
- * session_shutdown (e.g. uncaught exception). The -i flag creates a
- * "prevent user idle system sleep" assertion, which keeps the CPU
- * and network stack alive. This is the minimum needed to stop
- * WireGuard-based VPNs (e.g. Netbird) from dropping their
- * tunnel when the machine would otherwise idle-sleep.
- *
- * Display sleep and lid-close sleep are left alone — only the
- * idle-sleep timer is suppressed while the agent is active.
- *
- * macOS only — the extension is a no-op on other platforms.
+ * session_shutdown (e.g. uncaught exception).
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { spawn, type ChildProcess } from "node:child_process";
 import { platform } from "node:os";
 
+/**
+ * Build the command + args to keep the machine awake on the current platform.
+ * Returns null if the platform is unsupported.
+ */
+function inhibitCommand(): { cmd: string; args: string[] } | null {
+	switch (platform()) {
+		case "darwin":
+			return { cmd: "caffeinate", args: ["-i"] };
+
+		case "linux":
+			return {
+				cmd: "systemd-inhibit",
+				args: [
+					"--what=idle",
+					"--who=pi-caffeinate",
+					"--why=Keeping machine awake for Pi agent",
+					"--mode=block",
+					"sleep",
+					"infinity",
+				],
+			};
+
+		case "win32":
+			// PowerShell one-liner that:
+			// 1. Adds a P/Invoke signature for SetThreadExecutionState
+			// 2. Calls it with ES_CONTINUOUS | ES_SYSTEM_REQUIRED (0x80000001)
+			// 3. Sleeps forever (the execution state is thread-scoped and
+			//    released automatically when the process exits)
+			return {
+				cmd: "powershell.exe",
+				args: [
+					"-NoProfile",
+					"-NoLogo",
+					"-WindowStyle",
+					"Hidden",
+					"-Command",
+					[
+						"Add-Type -MemberDefinition",
+						"'[DllImport(\"kernel32.dll\")] public static extern uint SetThreadExecutionState(uint esFlags);'",
+						"-Name NativeMethods -Namespace Win32;",
+						"[Win32.NativeMethods]::SetThreadExecutionState(0x80000001);",
+						"[Threading.Thread]::Sleep([Threading.Timeout]::Infinite)",
+					].join(" "),
+				],
+			};
+
+		default:
+			return null;
+	}
+}
+
 export default function (pi: ExtensionAPI) {
-	if (platform() !== "darwin") return;
+	const command = inhibitCommand();
+	if (!command) return; // unsupported platform — no-op
 
 	let proc: ChildProcess | null = null;
 
 	function engage() {
 		if (proc) return; // already running
-		proc = spawn("caffeinate", ["-i"], {
+		proc = spawn(command.cmd, command.args, {
 			stdio: "ignore",
 			detached: false,
 		});
+
+		// If the command isn't found (e.g. no systemd-inhibit on a
+		// non-systemd Linux), silently ignore and null out.
+		proc.on("error", () => {
+			proc = null;
+		});
+
 		proc.on("exit", () => {
 			proc = null;
 		});
 	}
 
 	function disengage() {
-		if (proc) {
-			proc.kill("SIGTERM");
-			proc = null;
-		}
+		if (!proc) return;
+		// On Windows, SIGTERM is not supported — ChildProcess.kill()
+		// terminates the process tree. On Unix, SIGTERM is clean.
+		proc.kill();
+		proc = null;
 	}
 
-	// Safety net: kill caffeinate when our process exits for any reason.
-	// This fires on normal exit, SIGTERM, SIGINT, and even uncaught
-	// exceptions — but NOT SIGKILL (nothing can catch that).
+	// Safety net: kill the inhibitor when our process exits for any
+	// reason. This fires on normal exit, SIGTERM, SIGINT, and even
+	// uncaught exceptions — but NOT SIGKILL (nothing can catch that).
 	process.on("exit", () => {
 		disengage();
 	});
